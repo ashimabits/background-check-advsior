@@ -6,3 +6,4 @@ voice. The data from the amazon polly will be sent to API gateways which will be
 AWS lambada in the backend that queries Amazon athena to get the desired output. To 
 query athena we need to migrate the data to S3 datalake. We will be using Amazon 
 DMS to migrate data from source database to S3.
+![image](https://user-images.githubusercontent.com/99464791/226540859-87f10755-e1f2-47dd-9cfe-ad61174040ef.png)
