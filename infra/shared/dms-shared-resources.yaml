@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates DMS shared resources
+
+Parameters:
+  SubnetIds:
+    Description: Subnet IDs
+    Type: AWS::SSM::Parameter::Value<List<String>>
+    Default: "/network/vpc/1/subnet/isolated/ids"
+  VpcId:
+    Description: VPC ID
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: "/network/vpc/1/id"
+  KmsKeyArn:
+    Description: Kms Key Arn
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: "/datalake/kms/arn"
+  Environment:
+    Description: Deploy Environment
+    Type: String
+    Default: int
+
+Conditions:
+  IsUSEast1: !Equals [!Ref AWS::Region, "us-east-1"]
+  IsProd: !Equals [!Ref Environment, "prod"]
+
+Resources:
+  S3Role:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "dms.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:ListBucket"
+                Resource: !Join ["", [!ImportValue "s3-datalake-raw-bucket-arn", "*"]]
+              - Effect: Allow
+                Action:
+                  - "s3:PutObject"
+                  - "s3:DeleteObject"
+                Resource: !Join ["", [!ImportValue "s3-datalake-raw-bucket-arn", "*"]]
+              - Effect: "Allow"
+                Action:
+                  - "kms:Encrypt"
+                  - "kms:Decrypt"
+                  - "kms:ReEncrypt"
+                  - "kms:GenerateDataKey"
+                  - "kms:DescribeKey"
+                Resource:  
+                  - !Ref KmsKeyArn
+          PolicyName: "dms-s3-policy"
+      RoleName: !If 
+        - IsUSEast1
+        - "dms-s3-role"
+        - !Sub "dms-s3-role-${AWS::Region}"
+  VpcRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "dms.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonDMSVPCManagementRole
+      RoleName: !If 
+        - IsUSEast1
+        - "dms-vpc-role"
+        - !Sub "dms-vpc-role-${AWS::Region}"
+  CloudWatchLogsRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "dms.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonDMSCloudWatchLogsRole
+      RoleName: !If 
+        - IsUSEast1
+        - "dms-cloudwatch-logs-role"
+        - !Sub "dms-cloudwatch-logs-role-${AWS::Region}"
+  SecretsManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "dms.amazonaws.com"
+                - !Sub "dms.${AWS::Region}.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: 
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*"
+              - Effect: Allow
+                Action: 
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey
+                Resource: 
+                  - !Ref KmsKeyArn
+          PolicyName: "dms-secretsmanager-policy"
+      RoleName: !If 
+        - IsUSEast1
+        - "dms-secretsmanager-role"
+        - !Sub "dms-secretsmanager-role-${AWS::Region}"
+  KinesisRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "dms.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                  - kinesis:DescribeStream
+                Resource: 
+                  - !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/*-cdc-stream"
+              - Effect: Allow
+                Action: 
+                  - kms:GenerateDataKey
+                Resource: 
+                  - !Ref KmsKeyArn
+          PolicyName: "dms-kinesis-policy"
+      RoleName: !If 
+        - IsUSEast1
+        - "dms-kinesis-role"
+        - !Sub "dms-kinesis-role-${AWS::Region}"
+  ReplicationSubnetGroup:
+    DependsOn:
+      - VpcRole
+    Type: "AWS::DMS::ReplicationSubnetGroup"
+    Properties:
+      ReplicationSubnetGroupDescription: DMS Replication Subnet Group
+      ReplicationSubnetGroupIdentifier: "dms-replication-subnet-group"
+      SubnetIds:
+        - !Select [0, !Ref SubnetIds]
+        - !Select [1, !Ref SubnetIds]
+        - !Select [2, !Ref SubnetIds]
+  DMSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DMS Security Group
+      GroupName: dms-security-group
+      SecurityGroupIngress:
+        - CidrIp: 10.0.0.0/8
+          FromPort: 0
+          IpProtocol: tcp
+          ToPort: 65535
+      VpcId: !Ref VpcId
+  DMSSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DMSSecurityGroup
+      IpProtocol: "-1"
+      SourceSecurityGroupId: !Ref DMSSecurityGroup
+  NotificationTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      DisplayName: dms-event-notification
+      TopicName: dms-event-notification
+  EventSubscription:
+    Condition: IsProd
+    Type: "AWS::DMS::EventSubscription"
+    Properties:
+      SourceType: "replication-instance"
+      EventCategories:
+        - failure
+        - deletion
+        - "configuration change"
+      Enabled: true
+      SnsTopicArn: !Ref NotificationTopic
+      SubscriptionName: "dms-event-subscription"
+
+Outputs:
+  S3Role:
+    Value: !GetAtt S3Role.Arn
+    Export:
+      Name: "dms-s3-role-arn"
+  KinesisRole:
+    Value: !GetAtt KinesisRole.Arn
+    Export:
+      Name: "dms-kinesis-role-arn"
+  VpcRole:
+    Value: !GetAtt VpcRole.Arn
+    Export:
+      Name: "dms-vpc-role-arn"
+  SecretsManagerRole:
+    Value: !GetAtt SecretsManagerRole.Arn
+    Export:
+      Name: "dms-secretsmanager-role-arn"
+  CloudWatchLogsRole:
+    Value: !GetAtt CloudWatchLogsRole.Arn
+    Export:
+      Name: "dms-cloudwatch-logs-role-arn"
+  ReplicationSubnetGroup:
+    Value: !Ref ReplicationSubnetGroup
+    Export:
+      Name: "dms-replication-subnet-group"
+  DMSSecurityGroup:
+    Value: !Ref DMSSecurityGroup
+    Export:
+      Name: "dms-security-group"
+  NotificationTopic:
+    Value: !Ref NotificationTopic
+    Export:
+      Name: "dms-event-notification-topic"

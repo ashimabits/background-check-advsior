@@ -1,0 +1,72 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create DMS Instance
+  
+Parameters:
+  SourceName:
+    Description: Name (prefix) of the replication instance
+    Type: String
+    AllowedPattern: '^(?!-)(?!.*--)[A-Za-z0-9-]+(?<!-)$'
+  InstanceClass:
+    Description: Class of the replication instance
+    Type: String
+    Default: dms.t3.micro
+  EngineVersion:
+    Description: Version of the dms application
+    Type: String
+    Default: '3.4.6'
+  Environment:
+    Description: The deplotment environment
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: environment
+
+Resources:
+  ReplicationInstance:
+    Type: AWS::DMS::ReplicationInstance
+    Properties:
+      ReplicationInstanceIdentifier: !Sub 'dms-${SourceName}-instance'
+      KmsKeyId: !ImportValue 'kms-shared-key-id'
+      EngineVersion: !Ref EngineVersion
+      PreferredMaintenanceWindow: 'sat:06:00-sat:06:30'
+      AutoMinorVersionUpgrade: true
+      ReplicationSubnetGroupIdentifier: !ImportValue 'dms-replication-subnet-group'
+      AllowMajorVersionUpgrade: true
+      ReplicationInstanceClass: !Ref InstanceClass
+      PubliclyAccessible: false
+      MultiAZ: true
+      VpcSecurityGroupIds:
+        - !ImportValue 'dms-security-group'
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub "dms-${SourceName}-event-notification-${Environment}-${AWS::Region}"
+      TopicName: !Sub "dms-${SourceName}-event-notification-${Environment}-${AWS::Region}"
+  InstanceEventSubscription:
+    DependsOn: ReplicationInstance
+    Type: AWS::DMS::EventSubscription
+    Properties:
+      SourceType: replication-instance
+      SourceIds:
+        - !Sub 'dms-${SourceName}-instance'
+      EventCategories:
+        - failure
+        - deletion
+        - configuration change
+      Enabled: true
+      SnsTopicArn: !Ref NotificationTopic
+      SubscriptionName: !Sub "dms-${SourceName}-instance-events"
+
+Outputs:
+  ReplicationInstance:
+    Value: !Ref ReplicationInstance
+    Export: 
+      Name: !Sub "dms-${SourceName}-instance"
+  ReplicationInstanceName:
+    Value: !Sub 'dms-${SourceName}-instance'
+    Export: 
+      Name: !Sub "dms-${SourceName}-instance-name"
+  NotificationTopicArn:
+    Description: The notification topic arn
+    Value: !Ref NotificationTopic
+    Export: 
+      Name: !Sub "dms-${SourceName}-event-notification-arn"

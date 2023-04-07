@@ -1,0 +1,77 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates a basic task template
+  
+Parameters:
+  MigrationType:
+    Description: Migration type
+    Type: String
+    Default: full-load-and-cdc 
+    AllowedValues:
+      - cdc
+      - full-load
+      - full-load-and-cdc
+  SourceName:
+    Description: Name of the data source
+    Type: String
+    AllowedPattern: "^(?!-)(?!.*--)[A-Za-z0-9-]+(?<!-)$"
+    Default: backgroundcheck
+  SourceEndpointArn:
+    Description: The source endpoint arn
+    Type: String
+  TargetEndpointArn:
+    Description: The target endpoint arn
+    Type: String
+  DMSTaskMappings:
+    Description: The DMS Task Mappings s3 path
+    Type: String
+  TaskName:
+    Description: The name of the task
+    Type: String
+
+Resources:  
+  ReplicationTask:
+    Type: AWS::DMS::ReplicationTask
+    Properties:
+      MigrationType: !Ref MigrationType
+      ReplicationInstanceArn: 
+        Fn::ImportValue: !Sub "dms-${SourceName}-instance"
+      ReplicationTaskIdentifier: !Ref TaskName
+      ReplicationTaskSettings: |
+        {
+          "TargetMetadata": {
+            "SupportLobs": false,
+            "FullLobMode": false,
+            "LimitedSizeLobMode": false
+          },
+          "Logging": {
+            "EnableLogging": true
+          },
+          "ChangeProcessingDdlHandlingPolicy": {
+            "HandleSourceTableDropped": true,
+            "HandleSourceTableTruncated": true,
+            "HandleSourceTableAltered": true
+          }
+        }
+      SourceEndpointArn: !Ref SourceEndpointArn
+      Fn::Transform:
+        Name: AWS::Include
+        Parameters: 
+          Location: !Ref DMSTaskMappings
+      TargetEndpointArn: !Ref TargetEndpointArn
+  TaskEventSubscription:
+    DependsOn:
+      - ReplicationTask
+    Type: AWS::DMS::EventSubscription
+    Properties:
+      SourceType: replication-task
+      SourceIds:
+        - !Ref TaskName
+      EventCategories:
+        - failure
+        - deletion
+        - "configuration change"
+      Enabled: true
+      SnsTopicArn: 
+        Fn::ImportValue: !Sub "dms-${SourceName}-event-notification-arn"
+      SubscriptionName: !Sub "dms-${TaskName}-events"

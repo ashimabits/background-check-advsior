@@ -1,0 +1,76 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates a basic task template
+  
+Parameters:
+  KmsKeyArn:
+    Description: Kms Key Arn
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /datalake/kms/arn
+  SourceName:
+    Description: Name of the data source
+    Type: String
+    AllowedPattern: '^(?!-)(?!.*--)[A-Za-z0-9-]+(?<!-)$'
+  SourceEngine:
+    Description: Engine type of the database in data source
+    Type: String
+    AllowedValues:
+      - mysql
+      - postgres
+      - aurora
+      - aurora-postgresql
+      - redshift
+      - s3
+      - dynamodb
+      - sqlserver
+  SourceServer:
+    Description: Name or IP of server hosting the data source
+    Type: String
+  SourcePort:
+    Description: Port of the data source
+    Type: Number
+  SourceDatabase:
+    Description: Name of the database in data source
+    Type: String
+  SourceSecretArn:
+    Description: Arn of the secret of the data source stored in the secrets-manager
+    Type: String
+  SourceSslMode:
+    Description: SSL mode of the source
+    Type: String
+    Default: none
+    AllowedValues:
+      - none
+      - require 
+      - verify-ca
+      - verify-full
+  SourceConnectionAttributes:
+    Description: Additional connection attributes specified as a name-value pair associated by an equal sign (=) and separated by a semicolon (;) with no additional white space
+    Type: String
+    Default: ''
+
+Conditions:
+  SourceSslModeExists: !Not [!Equals [!Ref SourceSslMode, '']]
+  SourceConnectionAttributesExists: !Not [!Equals [!Ref SourceConnectionAttributes, '']]
+
+Resources:
+  SourceEndpoint:
+    Type: 'AWS::DMS::Endpoint'
+    Properties:
+      KmsKeyId: !Ref KmsKeyArn
+      Port: !Ref SourcePort
+      DatabaseName: !Ref SourceDatabase
+      EngineName: !Ref SourceEngine
+      SslMode: !If [SourceSslModeExists, !Ref SourceSslMode, !Ref 'AWS::NoValue']
+      ServerName: !Ref SourceServer
+      Username: "backgroundcheckuser"
+      Password: "backgroundcheckpassword"
+      ExtraConnectionAttributes: !If [SourceConnectionAttributesExists, !Ref SourceConnectionAttributes, !Ref 'AWS::NoValue']
+      EndpointType: source
+      EndpointIdentifier: !Sub '${SourceName}-source-endpoint'
+  SourceEndpointParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/dms/${SourceName}/source/endpoint/arn"
+      Type: String
+      Value: !Ref SourceEndpoint

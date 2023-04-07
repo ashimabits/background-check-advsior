@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: KMS Key
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment
+    Default: int
+    AllowedValues:
+      - int
+      - prod
+Resources:
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Enabled: true
+      EnableKeyRotation: true
+      Description: !Sub "KMS Key for data account used in ${Environment}"
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: !Sub "data-${Environment}-kms-policy"
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ""
+                - - "arn:aws:iam::"
+                  - !Ref "AWS::AccountId"
+                  - ":root"
+            Action: "kms:*"
+            Resource: "*"
+          - Sid: Enable S3 Permissions
+            Effect: Allow
+            Principal:
+              Service: "s3.amazonaws.com"
+            Action:
+              - "kms:GenerateDataKey"
+              - "kms:Decrypt"
+            Resource: "*"
+      Tags:
+        - Key: Name
+          Value: !Ref "AWS::StackName"
+  KMSAlias:
+    Condition: IsDevopsKmsKeyAbsent
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/backgroundcheck/data-${Environment}"
+      TargetKeyId: !Ref KMSKey
+  KmsKeyIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /datalake/kms/id
+      Type: String
+      Value: !Ref KMSKey
+  KmsKeyArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /datalake/kms/arn
+      Type: String
+      Value: !GetAtt KMSKey.Arn
+
+Outputs:
+  KMSKeyId:
+    Value: !GetAtt KmsKeyIdParam.Value
+    Export:
+      Name: !Sub "${AWS::StackName}-id"
+  KMSKeyArn:
+    Value: !GetAtt KmsKeyArnParam.Value
+    Export:
+      Name: !Sub "${AWS::StackName}-arn"
