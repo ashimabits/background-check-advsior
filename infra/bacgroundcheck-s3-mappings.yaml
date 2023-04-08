@@ -1,0 +1,80 @@
+TableMappings: |
+    {
+        "rules": [
+            {
+                "rule-type": "selection",
+                "rule-id": "1",
+                "rule-name": "1",
+                "object-locator": {
+                    "schema-name": "dbo",
+                    "table-name": "Backgroundcheckdetails"
+                },
+                "rule-action": "include",
+                "filters": []
+            },
+            {
+                "rule-type": "transformation",
+                "rule-id": "2",
+                "rule-name": "unit1-to-int1",
+                "rule-action": "change-data-type",
+                "rule-target": "column",
+                "object-locator": {
+                    "schema-name": "dbo",
+                    "table-name": "%",
+                    "column-name": "%",
+                    "data-type": "uint1"
+                },
+                "data-type": {
+                    "type": "int1"
+                }
+            },
+            {
+                "rule-type": "transformation",
+                "rule-id": "3",
+                "rule-name": "unit2-to-int2",
+                "rule-action": "change-data-type",
+                "rule-target": "column",
+                "object-locator": {
+                    "schema-name": "dbo",
+                    "table-name": "%",
+                    "column-name": "%",
+                    "data-type": "uint2"
+                },
+                "data-type": {
+                    "type": "int2"
+                }
+            },
+            {
+                "rule-type": "transformation",
+                "rule-id": "4",
+                "rule-name": "unit4-to-int4",
+                "rule-action": "change-data-type",
+                "rule-target": "column",
+                "object-locator": {
+                    "schema-name": "dbo",
+                    "table-name": "%",
+                    "column-name": "%",
+                    "data-type": "uint4"
+                },
+                "data-type": {
+                    "type": "int4"
+                }
+            },
+            {
+                "rule-type": "transformation",
+                "rule-id": "5",
+                "rule-name": "unit8-to-int8",
+                "rule-action": "change-data-type",
+                "rule-target": "column",
+                "object-locator": {
+                    "schema-name": "dbo",
+                    "table-name": "%",
+                    "column-name": "%",
+                    "data-type": "uint8"
+                },
+                "data-type": {
+                    "type": "int8"
+                }
+            }
+        ] 
+    }

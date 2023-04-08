@@ -1,0 +1,181 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: DMS Scaling function
+Parameters:
+  LogLevel:
+    Type: String
+    Description: Log level for Lambda function logging, e.g., ERROR, INFO, DEBUG, etc
+    Default: DEBUG
+  ArtifactsBucket:
+    Description: The Artifacts Bucket
+    Type: String
+  ArtifactsKey:
+    Description: The Artifacts Key
+    Type: String
+  SourceName:
+    Description: Name (prefix) of the replication instance
+    Type: String
+    AllowedPattern: "^(?!-)(?!.*--)[A-Za-z0-9-]+(?<!-)$"
+  KmsKeyArn:
+    Description: Kms key arn
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /datalake/kms/arn
+
+Resources:
+  AutoscalerTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      DisplayName: !Sub "dms-${SourceName}-autoscale-notification"
+      TopicName: !Sub "dms-${SourceName}-autoscale-notification"
+      Subscription:
+        - Endpoint: !GetAtt AutoscalerFunction.Arn
+          Protocol: lambda
+  DMSAutoScalingIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyDocument:
+            Version: "2012-10-17"
+            Statement:             
+              - Action:
+                  - dms:DescribeReplicationInstances
+                  - dms:DescribeReplicationTasks
+                  - dms:ModifyReplicationInstance
+                Effect: Allow
+                Resource: 
+                  Fn::ImportValue: !Sub "dms-${SourceName}-instance"
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/*        
+              - Action:
+                - cloudwatch:DeleteAlarms
+                - cloudwatch:EnableAlarmActions
+                - cloudwatch:GetMetricData
+                - cloudwatch:PutMetricAlarm
+                Effect: Allow
+                Resource: "*"
+              - Action:
+                - events:DeleteRule
+                - events:EnableRule
+                - events:PutRule
+                - events:PutTargets
+                - events:RemoveTargets
+                Effect: Allow
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "kms:Decrypt"
+                  - "kms:GenerateDataKey"
+                Resource: !Ref KmsKeyArn
+          PolicyName: !Sub "lambda-dms-${SourceName}-scaling-policy"
+  AutoscalerFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AutoscalerFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref AutoscalerTopic
+  AutoscalerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: !Ref ArtifactsBucket
+        S3Key: !Ref ArtifactsKey
+      Handler: replay.handler
+      Role: !GetAtt DMSAutoScalingIAMRole.Arn
+      Runtime: python3.7
+      TracingConfig:
+        Mode: Active
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref LogLevel  
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      MetricName: CPUUtilization
+      Namespace: "AWS/DMS"
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Average
+      Threshold: 80
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref AutoscalerTopic
+      Dimensions:
+        - Name: ReplicationInstanceIdentifier
+          Value:
+            Fn::ImportValue: !Sub "dms-${SourceName}-instance-name"
+      AlarmDescription: !Sub "High CPU usage by ${SourceName} DMS instance"
+      AlarmName: !Sub "${SourceName}-dms-cpu-high"
+  LowCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      MetricName: CPUUtilization
+      Namespace: "AWS/DMS"
+      ComparisonOperator: LessThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Average
+      Threshold: 30
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref AutoscalerTopic
+      Dimensions:
+        - Name: ReplicationInstanceIdentifier
+          Value:
+            Fn::ImportValue: !Sub "dms-${SourceName}-instance-name"
+      AlarmDescription: !Sub "Low CPU usage by ${SourceName} DMS instance"
+      AlarmName: !Sub "${SourceName}-dms-cpu-low"
+  LowFreeableMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref AutoscalerTopic
+      AlarmDescription: !Sub "Low Freeable Memory usage by ${SourceName} DMS instance"
+      AlarmName: !Sub "${SourceName}-dms-freemem-low"
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Dimensions:
+        - Name: ReplicationInstanceIdentifier
+          Value:
+            Fn::ImportValue: !Sub "dms-${SourceName}-instance-name"
+      EvaluationPeriods: 1
+      MetricName: FreeableMemory
+      Namespace: "AWS/DMS"
+      Period: 60
+      Statistic: Average
+      Threshold: 64000000 # 64 Megabyte in Byte
+  HighFreeableMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref AutoscalerTopic
+      AlarmDescription: !Sub "High Freeable Memory usage by ${SourceName} DMS instance"
+      AlarmName: !Sub "${SourceName}-dms-freemem-high"
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: ReplicationInstanceIdentifier
+          Value:
+            Fn::ImportValue: !Sub "dms-${SourceName}-instance-name"
+      EvaluationPeriods: 1
+      MetricName: FreeableMemory
+      Namespace: "AWS/DMS"
+      Period: 60
+      Statistic: Average
+      Threshold: 128000000 # 128 Megabyte in Byte

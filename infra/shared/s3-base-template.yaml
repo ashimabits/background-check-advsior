@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates s3 buckets for datalake
+
+Parameters: 
+  BucketType:
+    Description: Application Name
+    Type: String
+    Default: raw
+  Environment:
+    Description: Deployment Environment
+    Type: String
+    Default: int
+  KmsKeyArn:
+    Description: Kms Key Arn
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: "/datalake/kms/arn"
+  NotificationQueueArn:
+    Description: Notification Queue Arn 
+    Type: String
+    Default: ''
+
+Conditions:
+  HasNotificationQueue: !Not [!Equals [!Ref NotificationQueueArn, '']]
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration: 
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault: 
+              KMSMasterKeyID: !Ref KmsKeyArn
+              SSEAlgorithm: aws:kms
+      BucketName: !Sub 'backgroundcheck-datalake-${BucketType}-data-${Environment}-${AWS::Region}'
+      LifecycleConfiguration:
+        Rules: 
+          - ExpirationInDays: 2555
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 30 
+      NotificationConfiguration:
+        !If
+          - HasNotificationQueue
+          - QueueConfigurations: 
+              - Event: 's3:ObjectCreated:*'
+                Queue: !Ref NotificationQueueArn
+          - !Ref AWS::NoValue
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: service
+          Value: 'datalake'
+      VersioningConfiguration:
+        Status: Enabled
+  BucketParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/datalake/bucket/${BucketType}"
+      Type: String
+      Value: !Ref Bucket
+
+Outputs:
+  Bucket:
+    Value: !Ref Bucket
+    Export: 
+      Name: !Sub 's3-datalake-${BucketType}-bucket-name'
+  BucketArn:
+    Value: !GetAtt Bucket.Arn
+    Export: 
+      Name: !Sub 's3-datalake-${BucketType}-bucket-arn'

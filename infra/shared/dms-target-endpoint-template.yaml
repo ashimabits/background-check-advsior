@@ -1,0 +1,44 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: this is manual template for dms-target-endpoint (Redshift)
+  
+Parameters:
+
+  TargetName:
+    Description: Name of the data target
+    Type: String
+    AllowedPattern: "^(?!-)(?!.*--)[A-Za-z0-9-]+(?<!-)$"
+    Default: backgroundcheck
+Resources:
+  TargetEndpoint:
+    Type: AWS::DMS::Endpoint
+    Properties:
+      KmsKeyId: !ImportValue "kms-shared-key-id"
+      EngineName: s3
+      ExtraConnectionAttributes: !Join 
+        - ";"
+        - - "addColumnName=true"
+          - "cdcInsertsAndUpdates=true"
+          - "maxFileSize=393216"
+          - "encryptionMode=SSE_KMS"
+          - !Join ["=", ["serverSideEncryptionKmsKeyId", !ImportValue "kms-shared-key-id"]]
+          - "dataFormat=parquet"
+          - "dictPageSizeLimit=4,194,304‬"
+          - "rowGroupLength=32,768"
+          - "dataPageSize=4,194,304‬"
+          - "parquetVersion=PARQUET_2_0"
+          - "enableStatistics=true"
+          - "timestampColumnName=dms_timestamp"
+          - "parquetTimestampInMillisecond=true"
+      EndpointType: target
+      EndpointIdentifier: !Sub "${SourceName}-s3-target-endpoint"
+      S3Settings:
+        BucketName: !ImportValue "s3-datalake-raw-bucket-name"
+        BucketFolder: !Ref SourceName
+        ServiceAccessRoleArn: !ImportValue "dms-s3-role-arn"
+  TargetEndpointParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/dms/${TargetName}/target/endpoint/arn"
+      Type: String
+      Value: !Ref TargetEndpoint
+      
