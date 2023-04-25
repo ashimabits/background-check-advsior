@@ -1,0 +1,146 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates the Api Endpoint
+
+Parameters:
+  AppName:
+    Description: The application name
+    Type: String
+    Default: configuration-api
+  TeamEmail:
+    Type: String
+    Description: Team Owner Email Address
+    Default: ""
+  AppVersion:
+    Description: The application version v1, v2 etc.
+    Type: String
+  DomainName:
+    Description: The domain name
+    Type: String
+    Default: configuration-api
+  Environment: 
+    Type: String
+    Description: The environment
+  ApiStageName:
+    Type: String
+    Description: API Gateway Custom Domain Stage Name to deploy
+  ApiBasePath:
+    Type: String
+    Description: API Gateway Custom Domain Base Path to deploy  
+  InternalDomainName:
+    Type: AWS::SSM::Parameter::Value<String>
+    Description: The hosted zone domain name
+    Default: /internal.backgroundcheck.com/hosted-zone/domain
+Conditions:
+  IsNotDev: !Not [!Equals [!Ref Environment, "dev"]]
+  IsProd: !Equals [!Ref Environment, "prod"]
+  IsCaCentral1: !Equals [!Ref "AWS::Region", ca-central-1]
+Mappings:
+  Region:
+    us-east-1: 
+      Suffix: us
+    ca-central-1: 
+      Suffix: ca
+    eu-central-1: 
+      Suffix: eu
+    ap-southeast-2: 
+      Suffix: au
+
+Resources:
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AppName}-${AppVersion}-api" 
+      Description: !Sub "${AppName}-${AppVersion}-api"
+      ProtocolType: HTTP
+      Tags:
+        service: !Ref AppName
+        environment: !Ref Environment
+        owner: !Ref TeamEmail 
+  Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      ConnectionId: !If
+        - IsCaCentral1
+        - Fn::ImportValue: "api-gateway-v2-vpclink-ca-id"
+        - Fn::ImportValue: "api-gateway-v2-vpclink-default-id"
+      ConnectionType: VPC_LINK 
+      IntegrationMethod: ANY
+      IntegrationType: HTTP_PROXY 
+      IntegrationUri: 
+        Fn::ImportValue: !Sub "${AppName}-listener-arn"
+      PayloadFormatVersion: "1.0"
+      TlsConfig:
+        ServerNameToVerify: !Sub "${DomainName}-${AppVersion}.${InternalDomainName}"
+  SecretRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      Target: !Join ["/", [integrations, !Ref Integration]]
+      RouteKey: GET /secret
+      AuthorizationType: NONE 
+      ApiId: !Ref Api
+  HealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      Target: !Join ["/", [integrations, !Ref Integration]]
+      RouteKey: GET /health
+      AuthorizationType: NONE 
+      ApiId: !Ref Api
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: !Ref ApiStageName
+      ApiId: !Ref Api
+      AutoDeploy: true
+      StageVariables: 
+        ResourceServer: !Join [".", [!Ref DomainName, !FindInMap [Region, !Ref AWS::Region, Suffix]]]
+      Tags:
+        service: !Ref AppName
+        environment: !Ref Environment
+        owner: !Ref TeamEmail
+  ApiDomainName:    
+    Type: AWS::ApiGatewayV2::DomainName
+    Properties:
+      DomainName: !If 
+        - IsProd 
+        - !Join [".", [!Sub "${DomainName}", !FindInMap [Region, !Ref AWS::Region, Suffix], "backgroundcheck.com"]]
+        - !Sub "${DomainName}.${Environment}.backgroundcheck.com"
+      DomainNameConfigurations:
+        - CertificateArn:
+            Fn::ImportValue: !Sub "${DomainName}-certificate-arn"
+          SecurityPolicy: TLS_1_2
+      Tags:
+        service: !Ref AppName
+        environment: !Ref Environment
+        owner: !Ref TeamEmail
+  ApiMapping:   
+    DependsOn: 
+      - ApiDomainName
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      ApiId: !Ref Api
+      DomainName:
+        !If 
+        - IsProd 
+        - !Join [".", [!Sub "${DomainName}", !FindInMap [Region, !Ref AWS::Region, Suffix], "backgroundcheck.com"]]
+        - !Sub "${DomainName}.${Environment}.backgroundcheck.com"
+      Stage: !Ref Stage
+      ApiMappingKey: !Ref ApiBasePath
+  ApiRecordSet:    
+    DependsOn: 
+      - ApiDomainName
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !If 
+        - IsProd 
+        - !Join [".", [!Sub "${DomainName}", !FindInMap [Region, !Ref AWS::Region, Suffix], "backgroundcheck.com."]]
+        - !Sub "${DomainName}.${Environment}.backgroundcheck.com."    
+      Name: !If 
+        - IsProd 
+        - !Join [".", [!Sub "${DomainName}", !FindInMap [Region, !Ref AWS::Region, Suffix], "backgroundcheck.com"]]
+        - !Sub "${DomainName}.${Environment}.backgroundcheck.com"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApiDomainName.RegionalDomainName
+        HostedZoneId: !GetAtt ApiDomainName.RegionalHostedZoneId

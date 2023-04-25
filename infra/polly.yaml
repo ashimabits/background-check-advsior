@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Transform rss text articles into podcasts
+Parameters:
+  Environment:
+    Default: Development
+    Type: String
+  RSSFeed:
+    Type: String
+Resources:
+  pollyBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: "podcast.xml"
+  pollyBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: pollyBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - "s3:GetObject"
+            Effect: "Allow"
+            Resource:
+              Fn::Sub:
+                - "arn:aws:s3:::${bucket_name}/*"
+                - bucket_name:
+                    Ref: pollyBucket
+            Principal: "*"
+  pollyRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Rule to invoke pollycast lambda regularly
+      ScheduleExpression: "rate(3 minutes)"
+      State: ENABLED
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - pollycast
+              - Arn
+          Id: "PollyCastFunction"
+          Input:
+            Fn::Sub:
+              - '{
+                    "rss": "${RSSFeed}",
+                    "bucket": "${pollyBucket}"
+                }'
+              - {}
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        Ref: pollycast
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - pollyRule
+          - Arn
+  pollycast:
+    Properties:
+      CodeUri: ./_build
+      Handler: pollycast.lambda_handler
+      Environment:
+        Variables:
+          # todo how do I prioritize some? - can add them to the list multiple times.
+          # these are kids voices :p removing them for now.
+          # "Justin","Ivy"
+          # from https://docs.aws.amazon.com/polly/latest/dg/ntts-voices-main.html
+          Voices: Salli,Joey,Matthew,Joanna,Kendra,Kimberly,Amy,Emma,Brian
+      Policies:
+        - Statement:
+            - Action:
+                - polly:SynthesizeSpeech
+                - polly:StartSpeechSynthesisTask
+                - s3:ListBucket
+                - s3:PutObject
+                - xray:PutTraceSegments
+                - xray:PutTelemetryRecords
+                - polly:SynthesizeSpeech
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Effect: Allow
+              Resource:
+                - '*'
+          Version: '2012-10-17'
+        - Statement:
+            - Action:
+                - s3:ListBucket
+                - s3:PutObject
+              Effect: Allow
+              Resource:
+                - Fn::GetAtt:
+                    - pollyBucket
+                    - Arn
+          Version: '2012-10-17'
+      Runtime: python3.8
+      Timeout: 300
+    Type: AWS::Serverless::Function
+Transform: AWS::Serverless-2016-10-31
